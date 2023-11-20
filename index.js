@@ -4,53 +4,95 @@ console.log("Welcome to Quizzer!");
 
 const TOK = fs.readFileSync('token.secret')
 
-const COURSE_ID = "376033"
+const SKIP_WAIT = false;
 
-const QUIZ_ID = process.argv[2]
-const QUESTION_ID = process.argv[3]
-const isGo = process.argv.length === 5 && process.argv[4].toLowerCase() === 'go'
+
+// const COURSE_ID = "376033" // CS571
+const COURSE_ID = "374263" // CS220
+const QUIZ_ID = "493572";
+const QUESTION_ID = "5910878";
+const ASSIGNMENT_ID = "2110295";
+const POINT_VAL = 2.0;
+
+
+console.log("About to modify the gradebook, please make a backup first!");
+console.log("Ctrl+C to cancel or forever hold your peace....")
+
+if (!SKIP_WAIT) {
+    await delay(10 * 1000)
+}
 
 console.log("Running on Quiz #" + QUIZ_ID + " for Question #" + QUESTION_ID);
 
-if (isGo) {
-    console.log("Running in GO mode... I hope you made a backup!")
-} else {
-    console.log("Running in prelim mode...")
-}
+const subDeets = unravel(await fetchLinkableData(`https://canvas.wisc.edu/api/v1/courses/${COURSE_ID}/assignments/${ASSIGNMENT_ID}/submissions?include[]=submission_history&per_page=100`));
+const results = [];
 
-const data = await fetchLinkableData(`https://canvas.wisc.edu/api/v1/courses/${COURSE_ID}/quizzes/${QUIZ_ID}/submissions?per_page=100`)
-const subs = unravelAt(data, "quiz_submissions")
-const idsWithSubs = subs.filter(sub => sub.started_at).map(sub => sub.id);
+for(let datum of subDeets) {
+    for(let sub of datum.submission_history) {
+        // 7232
+        if(sub.submission_data) { // skip students that do not have a submission
+            const qRes = sub.submission_data.find(d => String(d.question_id) === QUESTION_ID)
+            // const qResText = qRes.text; // check sub response body
+            // const qResAttach = qRes?.attachment_ids; // check attachments
+            // results.push({
+            //     subId: sub.id,
+            //     userId: sub.user_id,
+            //     attempt: sub.attempt,
+            //     score: qResAttach ? POINT_VAL : 0
+            // })
 
-console.log(`${idsWithSubs.length} of ${subs.length} submitted!`)
-
-if (isGo) {
-    for (let subId of idsWithSubs) {
-        console.log(`Submitting grade for ${subId}...`)
-        const hders = await fetch(`https://canvas.wisc.edu/api/v1/courses/${COURSE_ID}/quizzes/${QUIZ_ID}/submissions/${subId}`, {
-            method: "PUT",
-            headers: {
-                'Authorization': 'Bearer ' + TOK,
-                'Content-Type': "application/json"
-            },
-            body: JSON.stringify({
-                "quiz_submissions": [{
-                  "attempt": 1,
-                  "questions": {
-                    [QUESTION_ID]: {
-                      "score": 0.2
-                    }
-                  }
-                }]
-              })
-        })
-        const status = hders.status
-        if (status !== 200) {
-            console.error(`!!! ERROR SUBMITTING GRADE FOR ${subId} !!! ${status}`)
+            // If they checked it, give them credit
+            if(qRes['answer_7232'] === "1") {
+                const pts = qRes.points
+                const low = Math.floor(qRes.points)
+                const rem = qRes.points - Math.floor(low);
+                let newScore = low + 0.3333333;
+                if(rem >= 0.32 && rem <= 0.34) {
+                    newScore = low + 0.6666667;
+                } else if (rem >= 0.65 && low <= 0.67) {
+                    newScore = low + 1;
+                }
+                console.log(`Changing score for ${sub.id} from ${qRes.points} to ${newScore}!`)
+                results.push({
+                    subId: sub.id,
+                    userId: sub.user_id,
+                    attempt: sub.attempt,
+                    score: newScore
+                })
+            }
         }
-        await delay(250 + Math.random() * 500)
     }
 }
+
+for (let result of results) {
+    const subId = result.subId;
+    const userId = result.userId;
+    console.log(`Submitting grade for U:${result.userId} S:${subId}...`)
+    const hders = await fetch(`https://canvas.wisc.edu/api/v1/courses/${COURSE_ID}/quizzes/${QUIZ_ID}/submissions/${subId}`, {
+        method: "PUT",
+        headers: {
+            'Authorization': 'Bearer ' + TOK,
+            'Content-Type': "application/json"
+        },
+        body: JSON.stringify({
+            "quiz_submissions": [{
+              "attempt": result.attempt,
+              "questions": {
+                [QUESTION_ID]: {
+                  "score": result.score
+                }
+              }
+            }]
+          })
+    })
+    const status = hders.status
+    if (status !== 200) {
+        console.error(`!!! ERROR SUBMITTING GRADE FOR U:${result.userId} S:${subId} !!! ${status}`)
+    }
+    await delay(250 + Math.random() * 500)
+}
+
+console.log("Complete!");
 
 // https://masteringjs.io/tutorials/fundamentals/wait-1-second-then
 async function delay(time) {
@@ -58,8 +100,8 @@ async function delay(time) {
 }
   
 
-function unravelAt(data, attr) {
-    return data.map(d => d[attr]).reduce((acc, curr) => [...acc, ...curr], [])
+function unravel(data, attr) {
+    return data.map(d => attr ? d[attr] : d).reduce((acc, curr) => [...acc, ...curr], [])
 }
 
 async function fetchLinkableData(url) {
